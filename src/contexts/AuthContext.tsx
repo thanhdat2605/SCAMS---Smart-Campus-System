@@ -1,6 +1,10 @@
 import React, { createContext, useState, useContext, useEffect } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { useToast } from '@/components/ui/use-toast';
+import axios from 'axios';
+
+// Define the API base URL
+const API_URL = 'http://localhost:5000/api';
 
 // Define user roles
 export type UserRole = 'student' | 'lecturer' | 'staff' | 'security' | 'admin' | 'guest';
@@ -12,15 +16,6 @@ export interface User {
   name: string;
   role: UserRole;
 }
-
-// Mock users for demo purposes
-const mockUsers: User[] = [
-  { id: '1', email: 'admin@university.edu', name: 'Admin User', role: 'admin' },
-  { id: '2', email: 'lecturer@university.edu', name: 'Jane Smith', role: 'lecturer' },
-  { id: '3', email: 'student@university.edu', name: 'John Doe', role: 'student' },
-  { id: '4', email: 'security@university.edu', name: 'Mike Johnson', role: 'security' },
-  { id: '5', email: 'staff@university.edu', name: 'Sarah Williams', role: 'staff' },
-];
 
 interface AuthContextType {
   user: User | null;
@@ -35,6 +30,15 @@ interface AuthContextType {
 
 const AuthContext = createContext<AuthContextType | undefined>(undefined);
 
+// Set auth token for all requests
+const setAuthToken = (token: string | null) => {
+  if (token) {
+    axios.defaults.headers.common['x-auth-token'] = token;
+  } else {
+    delete axios.defaults.headers.common['x-auth-token'];
+  }
+};
+
 export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children }) => {
   const [user, setUser] = useState<User | null>(null);
   const [loading, setLoading] = useState(true);
@@ -43,16 +47,30 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
 
   // Check for existing session on mount
   useEffect(() => {
-    const storedUser = localStorage.getItem('scamsUser');
-    if (storedUser) {
-      try {
-        setUser(JSON.parse(storedUser));
-      } catch (error) {
-        console.error('Failed to parse stored user', error);
-        localStorage.removeItem('scamsUser');
+    const loadUser = async () => {
+      const token = localStorage.getItem('scamsToken');
+      
+      if (token) {
+        setAuthToken(token);
+        try {
+          const res = await axios.get(`${API_URL}/auth/me`);
+          setUser({
+            id: res.data._id,
+            email: res.data.email,
+            name: res.data.name,
+            role: res.data.role as UserRole
+          });
+        } catch (error) {
+          console.error('Failed to load user', error);
+          localStorage.removeItem('scamsToken');
+          setAuthToken(null);
+        }
       }
-    }
-    setLoading(false);
+      
+      setLoading(false);
+    };
+
+    loadUser();
   }, []);
 
   // Login function
@@ -60,32 +78,35 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
     setLoading(true);
     
     try {
-      // Simulate API call
-      await new Promise(resolve => setTimeout(resolve, 1000));
+      const res = await axios.post(`${API_URL}/auth/login`, { email, password });
       
-      // Find user by email (in a real app, this would be a server call)
-      const foundUser = mockUsers.find(u => u.email.toLowerCase() === email.toLowerCase());
+      // Set token in localStorage
+      localStorage.setItem('scamsToken', res.data.token);
+      setAuthToken(res.data.token);
       
-      if (!foundUser || password !== 'password') { // In a real app, you'd verify the password properly
-        throw new Error('Invalid email or password');
-      }
+      // Set user from response
+      const userData = res.data.user;
+      const loggedInUser: User = {
+        id: userData.id,
+        email: userData.email,
+        name: userData.name,
+        role: userData.role
+      };
       
-      // Set user in state and localStorage
-      setUser(foundUser);
-      localStorage.setItem('scamsUser', JSON.stringify(foundUser));
+      setUser(loggedInUser);
       
       toast({
         title: 'Login successful',
-        description: `Welcome back, ${foundUser.name}!`,
+        description: `Welcome back, ${loggedInUser.name}!`,
       });
       
       // Redirect to dashboard
       navigate('/dashboard');
-    } catch (error) {
+    } catch (error: any) {
       console.error('Login error:', error);
       toast({
         title: 'Login failed',
-        description: error instanceof Error ? error.message : 'An error occurred during login',
+        description: error.response?.data?.msg || 'An error occurred during login',
         variant: 'destructive',
       });
       throw error;
@@ -99,24 +120,7 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
     setLoading(true);
     
     try {
-      // Simulate API call
-      await new Promise(resolve => setTimeout(resolve, 1000));
-      
-      // Check if email already exists
-      if (mockUsers.some(u => u.email.toLowerCase() === email.toLowerCase())) {
-        throw new Error('Email already in use');
-      }
-      
-      // Create new user (in a real app, this would be a server call)
-      const newUser: User = {
-        id: String(mockUsers.length + 1),
-        email,
-        name,
-        role,
-      };
-      
-      // Add to mock users (in a real app, this would be saved to the database)
-      mockUsers.push(newUser);
+      await axios.post(`${API_URL}/auth/register`, { email, name, password, role });
       
       toast({
         title: 'Registration successful',
@@ -125,11 +129,11 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
       
       // Redirect to login
       navigate('/login');
-    } catch (error) {
+    } catch (error: any) {
       console.error('Registration error:', error);
       toast({
         title: 'Registration failed',
-        description: error instanceof Error ? error.message : 'An error occurred during registration',
+        description: error.response?.data?.msg || 'An error occurred during registration',
         variant: 'destructive',
       });
       throw error;
@@ -140,12 +144,15 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
 
   // Logout function
   const logout = () => {
+    localStorage.removeItem('scamsToken');
+    setAuthToken(null);
     setUser(null);
-    localStorage.removeItem('scamsUser');
+    
     toast({
       title: 'Logged out',
       description: 'You have been successfully logged out',
     });
+    
     navigate('/login');
   };
 
@@ -154,25 +161,17 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
     setLoading(true);
     
     try {
-      // Simulate API call
-      await new Promise(resolve => setTimeout(resolve, 1000));
-      
-      // Check if email exists
-      if (!mockUsers.some(u => u.email.toLowerCase() === email.toLowerCase())) {
-        throw new Error('Email not found');
-      }
+      await axios.post(`${API_URL}/auth/forgot-password`, { email });
       
       toast({
         title: 'Password reset email sent',
         description: 'Please check your email for a link to reset your password',
       });
-      
-      // In a real app, this would send an email with a reset link
-    } catch (error) {
+    } catch (error: any) {
       console.error('Forgot password error:', error);
       toast({
         title: 'Password reset failed',
-        description: error instanceof Error ? error.message : 'An error occurred',
+        description: error.response?.data?.msg || 'An error occurred',
         variant: 'destructive',
       });
       throw error;
@@ -186,10 +185,7 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
     setLoading(true);
     
     try {
-      // Simulate API call
-      await new Promise(resolve => setTimeout(resolve, 1000));
-      
-      // In a real app, this would validate the token and update the password
+      await axios.post(`${API_URL}/auth/reset-password`, { token, password: newPassword });
       
       toast({
         title: 'Password reset successful',
@@ -197,11 +193,11 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
       });
       
       navigate('/login');
-    } catch (error) {
+    } catch (error: any) {
       console.error('Reset password error:', error);
       toast({
         title: 'Password reset failed',
-        description: error instanceof Error ? error.message : 'An error occurred',
+        description: error.response?.data?.msg || 'An error occurred',
         variant: 'destructive',
       });
       throw error;
@@ -215,23 +211,20 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
     setLoading(true);
     
     try {
-      // Simulate API call
-      await new Promise(resolve => setTimeout(resolve, 1000));
-      
-      // In a real app, this would verify the current password and update with the new one
-      if (currentPassword !== 'password') {
-        throw new Error('Current password is incorrect');
-      }
+      await axios.post(`${API_URL}/auth/change-password`, { 
+        currentPassword, 
+        newPassword 
+      });
       
       toast({
         title: 'Password changed',
         description: 'Your password has been successfully updated',
       });
-    } catch (error) {
+    } catch (error: any) {
       console.error('Change password error:', error);
       toast({
         title: 'Password change failed',
-        description: error instanceof Error ? error.message : 'An error occurred',
+        description: error.response?.data?.msg || 'An error occurred',
         variant: 'destructive',
       });
       throw error;
