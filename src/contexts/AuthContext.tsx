@@ -4,7 +4,7 @@ import { useToast } from '@/components/ui/use-toast';
 import axios from 'axios';
 
 // Define the API base URL
-const API_URL = 'http://localhost:5000/api';
+const API_URL = '/api';
 
 // Define user roles
 export type UserRole = 'student' | 'lecturer' | 'staff' | 'security' | 'admin' | 'guest';
